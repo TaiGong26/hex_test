@@ -244,35 +244,119 @@ def draw_loop():
             time.sleep(time.monotonic() - last_draw_time)
 
 
+# async def delay(,interval):
 
 def kcp_send_thread(kcp_client):
 
+    interval = 0.001 #ms
     # time.monotonic()
 
     last_send_time = time.perf_counter()
 
+    # 开启新的事件循环
+    # asyncio.run(kcp_send_async(kcp_client, interval))
 
+    next_send_time = time.perf_counter()
+
+    """
+    关于等待技巧：
+        精度最高：忙等，CPU占用高
+        异步等待：
+                1. 异步等待：asyncio.sleep(0.001)
+        
+    """
 
     while True:
         # 等同步
         if not kcp_conn_ready_event.is_set():
             time.sleep(0.1) # 未就绪时休眠，避免 CPU 空转
             continue
-        
-        
 
-        # 周期计算
-        if time.perf_counter() - last_send_time <= 0.001:
-            # 发
-            move_msg = APIMsg.set_simple_move_command(True,0.5,0,0)   # speed command
+        """
+            忙等
+        """
+
+        
+        """
+            直接接发，周期再1ms以内，不过随着msg的增加而增加
+                一般在5e-05左右
+
+        """
+        # # 发
+        # move_msg = APIMsg.set_simple_move_command(True,0.5,0,0)   # speed command
+        # kcp_client.send_hex(move_msg)
+        # print(f"kcp 周期：{time.perf_counter() - last_send_time}")
+        # last_send_time =  time.perf_counter()
+
+        
+        """
+            用 sleep_time计算睡眠事件，来完成周期。 实际上只有500-600hz,大概1-2ms左右
+                sleep_time = (interval - (send_end_time - send_start_time))
+
+        """
+        # # 发
+        # send_start_time = time.perf_counter()
+        # move_msg = APIMsg.set_simple_move_command(True,0.5,0,0)   # speed command
+        # kcp_client.send_hex(move_msg)
+        # send_end_time = time.perf_counter()
+
+        # sleep_time = (interval - (send_end_time - send_start_time)) - 0.0002
+        # # sleep_time = (interval - (send_end_time - send_start_time)) *0.5
+        # if sleep_time > 0:
+        #     # pass
+        #     time.sleep(sleep_time)
+        
+        # print(f"kcp 周期：{time.perf_counter() - last_send_time}, sleep time:{sleep_time}, 发送时长{send_end_time - send_start_time}")
+        # last_send_time =  time.perf_counter()
+
+         # ==========================================
+        # 核心定时逻辑：混合休眠
+        # ==========================================
+        
+        # 计算距离下一次发送还需要多久
+        remain_time = next_send_time - time.perf_counter()
+        print(f"remain_time: {remain_time:.6f}")
+        if remain_time > 0:
+            # A. 粗粒度休眠 (释放 CPU，让出 GIL)
+            # 如果剩余时间较多，睡掉大部分，但预留 0.0003s (0.3ms) 的安全余量
+            # 这里的 0.0003 是为了抵消系统唤醒和 GIL 等待的延迟
+            if remain_time > 0.00025:
+                time.sleep(remain_time - 0.00025)
+            # time.sleep(remain_time - 0.0002)
+            
+            # B. 细粒度忙等 (占用 CPU，死守精度)
+            # 剩下的最后 0.3ms 或者时间已到，进入忙等
+            # 忙等期间线程是 Ready 状态，一旦时间到立刻执行，无需等待 GIL 调度
+            while time.perf_counter() < next_send_time:
+                pass
+
+        try:
+            move_msg = APIMsg.set_simple_move_command(True,0.5,0,0)
             kcp_client.send_hex(move_msg)
+        except Exception as e:
+            print(f"发送异常: {e}")
 
-            time.sleep(time.perf_counter() - last_send_time)
-            print(f"kcp send time{time.perf_counter() - last_send_time}")
-            last_send_time = time.perf_counter()
-        # else:
-        #     time.sleep(0.5)
+        next_send_time += interval
+        # print(f"周期: {time.perf_counter() - (next_send_time - interval):.6f}")
+        print(f"kcp 周期：{time.perf_counter() - last_send_time}")
+        last_send_time = time.perf_counter()
 
+        # # 周期计算
+        # if time.perf_counter() - last_send_time <= 0.001:
+        #     # 发
+        #     send_start_time = time.perf_counter()
+        #     move_msg = APIMsg.set_simple_move_command(True,0.5,0,0)   # speed command
+        #     kcp_client.send_hex(move_msg)
+        #     send_end_time = time.perf_counter()
+        #     print(f"kcp 发送时长{send_end_time - send_start_time}")
+
+        #     time.sleep(time.perf_counter() - last_send_time)
+        #     # print(f"kcp send time{time.perf_counter() - last_send_time}")
+        #     last_send_time = time.perf_counter()
+
+        """
+            尝试开辟新的事件循环，使用async.sleep完成周期控制
+        """
 
 draw_thread = None
 def start_thread(kcp_client):
