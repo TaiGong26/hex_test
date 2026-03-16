@@ -265,12 +265,24 @@ def kcp_send_thread(kcp_client):
                 1. 异步等待：asyncio.sleep(0.001)
         
     """
+    # while True:
+    #     if not kcp_conn_ready_event.is_set():
+
+    #         time.sleep(0.1) # 未就绪时休眠，避免 CPU 空转
+    #         continue
+    #     break
+
+    while not kcp_conn_ready_event.is_set():
+        time.sleep(0.1) # 未就绪时休眠，避免 CPU 空转
+        continue
+
+
+    start_f_time = time.perf_counter()
+    cnt = 0
 
     while True:
+    # for _ in range(1000):
         # 等同步
-        if not kcp_conn_ready_event.is_set():
-            time.sleep(0.1) # 未就绪时休眠，避免 CPU 空转
-            continue
 
         """
             忙等
@@ -282,7 +294,7 @@ def kcp_send_thread(kcp_client):
                 一般在5e-05左右
 
         """
-        # # 发
+        # 发
         # move_msg = APIMsg.set_simple_move_command(True,0.5,0,0)   # speed command
         # kcp_client.send_hex(move_msg)
         # print(f"kcp 周期：{time.perf_counter() - last_send_time}")
@@ -300,8 +312,8 @@ def kcp_send_thread(kcp_client):
         # kcp_client.send_hex(move_msg)
         # send_end_time = time.perf_counter()
 
-        # sleep_time = (interval - (send_end_time - send_start_time)) - 0.0002
-        # # sleep_time = (interval - (send_end_time - send_start_time)) *0.5
+        # # sleep_time = (interval - (send_end_time - send_start_time)) - 0.0005
+        # sleep_time = (interval - (send_end_time - send_start_time)) *0.2
         # if sleep_time > 0:
         #     # pass
         #     time.sleep(sleep_time)
@@ -309,19 +321,20 @@ def kcp_send_thread(kcp_client):
         # print(f"kcp 周期：{time.perf_counter() - last_send_time}, sleep time:{sleep_time}, 发送时长{send_end_time - send_start_time}")
         # last_send_time =  time.perf_counter()
 
-         # ==========================================
+        # ==========================================
         # 核心定时逻辑：混合休眠
         # ==========================================
         
         # 计算距离下一次发送还需要多久
         remain_time = next_send_time - time.perf_counter()
-        print(f"remain_time: {remain_time:.6f}")
+        # print(f"remain_time: {remain_time:.6f}")
         if remain_time > 0:
+            
             # A. 粗粒度休眠 (释放 CPU，让出 GIL)
             # 如果剩余时间较多，睡掉大部分，但预留 0.0003s (0.3ms) 的安全余量
             # 这里的 0.0003 是为了抵消系统唤醒和 GIL 等待的延迟
-            if remain_time > 0.00025:
-                time.sleep(remain_time - 0.00025)
+            if remain_time > 0.0002:
+                time.sleep(remain_time - 0.0002)
             # time.sleep(remain_time - 0.0002)
             
             # B. 细粒度忙等 (占用 CPU，死守精度)
@@ -358,6 +371,15 @@ def kcp_send_thread(kcp_client):
             尝试开辟新的事件循环，使用async.sleep完成周期控制
         """
 
+
+
+
+        cnt+=1
+        if cnt == 2000: break
+
+    end_f_time = time.perf_counter()
+    print(f"发送频率：{cnt / (end_f_time - start_f_time)}，发送时长：{end_f_time - start_f_time}")
+
 draw_thread = None
 def start_thread(kcp_client):
     global draw_thread
@@ -370,13 +392,16 @@ def start_thread(kcp_client):
 async def main():
     x4_ws_client = WebSocketClient(Server_Host, Server_Port, heartBeat=True)
     x4_kcp_client = KCPClient()
+    
     try:
         await asyncio.gather(
             x4_ws_client.start(),
             crl_loop(x4_ws_client, x4_kcp_client)
         )
     except KeyboardInterrupt:
+        
         print("\n程序被用户中断")
+
     finally:
         await x4_ws_client.stop()
 
