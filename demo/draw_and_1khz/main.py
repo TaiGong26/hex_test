@@ -64,6 +64,7 @@ def kcp_recv_handler(data: bytes):
                 #     kcp_recv_buff.append(up_msg)
                 # 采用双端队列完成缓冲区操作
                 kcp_recv_buff.append(up_msg)
+                # print(f"[KCP 回调] 收到消息: {up_msg}")
 
                 # return up_msg
             except Exception as e:
@@ -216,8 +217,8 @@ async def crl_loop(ws_client: WebSocketClient, kcp_client: KCPClient):
             #     #     kcp_client.send_hex(move_msg)
 
                 
-            #     move_msg = APIMsg.set_simple_move_command(True,0.5,0,0)   # speed command
-            #     kcp_client.send_hex(move_msg)
+                # move_msg = APIMsg.set_simple_move_command(True,0.5,0,0)   # speed command
+                # kcp_client.send_hex(move_msg)
                         
             #     last_kcp_send_time = time.time()
             
@@ -245,18 +246,30 @@ def draw_loop():
 
 
 def kcp_send_thread(kcp_client):
-    
-    last_send_time = time.monotonic()
+
+    # time.monotonic()
+
+    last_send_time = time.perf_counter()
+
+
 
     while True:
+        # 等同步
         if not kcp_conn_ready_event.is_set():
             time.sleep(0.1) # 未就绪时休眠，避免 CPU 空转
             continue
-        if time.monotonic() - last_send_time >= 0.001:
+        
+        
 
+        # 周期计算
+        if time.perf_counter() - last_send_time <= 0.001:
+            # 发
             move_msg = APIMsg.set_simple_move_command(True,0.5,0,0)   # speed command
             kcp_client.send_hex(move_msg)
-            time.sleep(time.monotonic() - last_send_time)
+
+            time.sleep(time.perf_counter() - last_send_time)
+            print(f"kcp send time{time.perf_counter() - last_send_time}")
+            last_send_time = time.perf_counter()
         # else:
         #     time.sleep(0.5)
 
