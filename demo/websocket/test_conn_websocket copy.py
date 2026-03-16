@@ -8,8 +8,6 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
-from collections import deque
-
 # --- 配置 ---
 Server_Host = "172.18.1.76"
 Server_Port = 8439
@@ -32,8 +30,6 @@ class KCPConfig:
     receive_window_size: int = 128
 
 KCPCONFIG = KCPConfig()
-
-recv_buf = deque(maxlen=10)
 
 class WebSocketClient:
     def __init__(self, addr: str, port: int, heartBeat: bool = False):
@@ -116,7 +112,6 @@ class WebSocketClient:
                 up_msg.ParseFromString(data)
                 self._recv_msg = up_msg
                 self.last_recv_time = time.time()
-                recv_buf.append(up_msg)
                 
                 # 生产环境建议注释以下打印，1000Hz日志太多
                 # logging.debug(f"收到状态: {up_msg}") 
@@ -276,7 +271,6 @@ async def main():
             control_loop(x4)
         )
     except KeyboardInterrupt:
-        print(f"msg:{recv_buf[-1]}")
         print("\n程序被用户中断")
     finally:
         await x4.stop()

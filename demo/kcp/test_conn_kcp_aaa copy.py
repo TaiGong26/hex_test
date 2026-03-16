@@ -13,8 +13,6 @@ import traceback
 import logging
 import queue
 from hex_socket import HexSocketParser, HexSocketOpcode
-from collections import deque
-from plotjuggle_draw import PlotjuggleDraw
 
 
 # --- 配置 ---
@@ -178,7 +176,6 @@ class KCPClient:
         self._kcp_send_data = b'' 
         self.recv_callback = None
         self.local_port = 0 # 新增：记录本地端口
-        self.last_recv_time=time.monotonic()
 
 
     def set_recv_callback(self, callback):
@@ -249,7 +246,7 @@ class KCPClient:
             if self._kcp:
                 self._kcp.enqueue(data)
                 self._kcp.flush()
-                # print(f"data:{time.time()}")
+                print(f"data:{time.time()}")
             else:
                 # print("1")
                 pass
@@ -267,9 +264,7 @@ class KCPClient:
         while self._running:
             try:
                 data,addr = self.socket.recvfrom(2048)
-                # print(f"data：{data} addr{addr}")
-                # print(f"recv_time：{ time.monotonic() - self.last_recv_time}")
-                self.last_recv_time=time.monotonic()
+                print(f"data：{data} addr{addr}")
                 self._kcp.receive(data)
                 while True:
                     msg = self._kcp.get_received()
@@ -317,18 +312,11 @@ class KCPClient:
         if self.socket:
             self.socket.close()
 
-
-Draw = PlotjuggleDraw()
 # --- 全局状态 ---
 control_ready_event = asyncio.Event()
 
 hex_parser = HexSocketParser()
-last_recv_time = time.time()
-
-KCP_BUFF_LEN = 20
-kcp_recv_buff = deque(maxlen=KCP_BUFF_LEN)
 def kcp_recv_handler(data: bytes):
-    global last_recv_time
     # 先把收到的数据喂给 HexSocket 解析器
     result = hex_parser.parse(data)  # 可能一次解析出多个帧
 
@@ -336,8 +324,6 @@ def kcp_recv_handler(data: bytes):
         # 还没有完整帧，可能只是部分头部
         return
 
-    print(f"recv_time：{ time.time() - last_recv_time}")
-    last_recv_time = time.time()
     # 遍历所有解析出来的帧
     for opcode, payload in result:
         # 根据 opcode 分发：通常只用 Binary
@@ -349,13 +335,6 @@ def kcp_recv_handler(data: bytes):
                     if not control_ready_event.is_set():
                         print(f"[KCP 回调] >>> 控制权获取成功! <<<")
                         control_ready_event.set()
-
-                # if len(kcp_recv_buff) >= KCP_BUFF_LEN:
-                #     kcp_recv_buff.pop()
-                #     print(len(kcp_recv_buff))
-                kcp_recv_buff.append(up_msg)
-                print(len(kcp_recv_buff))
-                Draw.send_data(payload)
             except Exception as e:
                 print(f"[KCP 回调] Proto 解析失败: {e}")
         elif opcode == HexSocketOpcode.Text:
@@ -467,17 +446,6 @@ def msg_init():
     msg.protocol_minor_version = 4
     dmsg.placeholder_message  = True
     
-    kcp_send_queue.append(dmsg)
-
-
-    # ==========================================
-    # KCP 部分：频率上报
-    # ==========================================
-
-    msg = public_api_down_pb2.APIDown()
-    msg.protocol_major_version = 1
-    msg.protocol_minor_version = 4
-    msg.set_report_frequency =public_api_types_pb2.Rf1Hz
     kcp_send_queue.append(dmsg)
 
 
@@ -597,18 +565,8 @@ async def crl_loop(ws_client: WebSocketClient, kcp_client: KCPClient):
                                 # 初始化
                                 move_msg = kcp_send_queue[1]
                                 kcp_client.send_hex(move_msg)
-                                
-                                move_msg = kcp_send_queue[3]
-                                kcp_client.send_hex(move_msg)
 
                                 kcp_connet= True
-
-                                msg = public_api_down_pb2.APIDown()
-                                msg.protocol_major_version = 1
-                                msg.protocol_minor_version = 4
-                                msg.set_report_frequency = public_api_types_pb2.Rf50Hz
-                                
-                                await ws_client.send_msg(msg)
                             
                             # 标记状态切换
                             is_getkcp_port = True
@@ -640,12 +598,12 @@ async def crl_loop(ws_client: WebSocketClient, kcp_client: KCPClient):
                 # print(recv_msg.report_frequency)
             # --- WebSocket 心跳 (1Hz) ---
             # # 发送队列第二条 (占位符)
-            if current_time - last_ws_send_time >= 1.0:
-                # move_msg = kcp_send_queue[0]
-                # kcp_client.send_hex(ws_send_queue[1])
+            # if current_time - last_ws_send_time >= 1.0:
+            #     # move_msg = kcp_send_queue[0]
+            #     # kcp_client.send_hex(ws_send_queue[1])
             
-                await ws_client.send_msg(ws_send_queue[1])
-                last_ws_send_time = current_time
+            #     # await ws_client.send_msg(ws_send_queue[1])
+            #     last_ws_send_time = current_time
 
             # --- KCP 控制指令发送 (100Hz) ---
             if current_time - last_kcp_send_time >= 0.01:
@@ -695,7 +653,6 @@ async def main():
         )
     except KeyboardInterrupt:
         print("\n程序被用户中断")
-        print(f"kcp_recv_buff: {kcp_recv_buff}")
     finally:
         await x4_ws_client.stop()
 
