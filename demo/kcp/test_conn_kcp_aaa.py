@@ -291,21 +291,6 @@ class KCPClient:
                 self._kcp.update(10)
             time.sleep(0.001)
 
-    # def _send_loop(self):
-    #     print(f"[KCP] 发送线程启动 (Local:{self.local_port} -> Remote:{self.server_addr})")
-    #     while self._running:
-    #         start_time = time.monotonic()
-    #         if self._kcp_send_data:
-    #             try:
-    #                 data = self._kcp_send_data.SerializeToString()
-    #                 self.send(data)
-    #             except Exception:
-    #                 pass
-    #         elapsed = time.monotonic() - start_time
-    #         sleep_time = KCP_SEND_INTERVAL - elapsed
-    #         if sleep_time > 0:
-    #             time.sleep(sleep_time)
-
     def start(self):
         self._running = True
         threading.Thread(target=self._recv_loop, daemon=True).start()
@@ -336,7 +321,7 @@ def kcp_recv_handler(data: bytes):
         # 还没有完整帧，可能只是部分头部
         return
 
-    print(f"recv_time：{ time.time() - last_recv_time}")
+    # print(f"recv_time：{ time.time() - last_recv_time}")
     last_recv_time = time.time()
     # 遍历所有解析出来的帧
     for opcode, payload in result:
@@ -345,6 +330,7 @@ def kcp_recv_handler(data: bytes):
             try:
                 up_msg = public_api_up_pb2.APIUp()
                 up_msg.ParseFromString(payload)  # 注意：这里是从 payload 解，不是原始 data
+                # print(f"[KCP 回调] 收到 Binary 帧: {up_msg}")
                 if up_msg.base_status.api_control_initialized:
                     if not control_ready_event.is_set():
                         print(f"[KCP 回调] >>> 控制权获取成功! <<<")
@@ -354,7 +340,7 @@ def kcp_recv_handler(data: bytes):
                 #     kcp_recv_buff.pop()
                 #     print(len(kcp_recv_buff))
                 kcp_recv_buff.append(up_msg)
-                print(len(kcp_recv_buff))
+                # print(len(kcp_recv_buff))
                 Draw.send_data(payload)
             except Exception as e:
                 print(f"[KCP 回调] Proto 解析失败: {e}")
@@ -481,46 +467,6 @@ def msg_init():
     kcp_send_queue.append(dmsg)
 
 
-
-# async def crl_loop(ws_client, kcp_client):
-#     await ws_client.wait_for_connection()
-#     logging.info("[业务] WebSocket 已连接，开始握手流程...")
-#     while ws_client._connection_alive and not ws_client._stop_event.is_set():
-#         # 记录时间
-#         loop_start = time.time()
-
-
-#         # 数据逻辑
-
-
-#         # 发送频率控制逻辑
-#         await ws_client.send_msg(ws_send_queue[0])
-#         print("暴力发送kcp")
-#         recv_msg = ws_client.get_recv_msg()
-#         if recv_msg:
-            
-#             if recv_msg.HasField('kcp_server_status'):
-#                 kcp_port = recv_msg.kcp_server_status.server_port
-#                 print(f"port{kcp_port}")
-#             if recv_msg.HasField('session_id'):
-#                 conv = recv_msg.session_id
-#                 print(f"conv:{conv}")
-
-# async def main():
-#     x4_ws_client = WebSocketClient(Server_Host, Server_Port, heartBeat=True)
-#     x4_kcp_client = KCPClient()
-#     try:
-#         await asyncio.gather(
-#             x4_ws_client.start(),
-#             crl_loop(x4_ws_client,x4_kcp_client)
-#         )
-#     except KeyboardInterrupt:
-#         print("\n程序被用户中断")
-#     finally:
-#         await x4_ws_client.stop()
-
-
-
 # --- 全局状态补充 ---
 last_ws_send_time = 0
 last_kcp_send_time = 0
@@ -603,12 +549,12 @@ async def crl_loop(ws_client: WebSocketClient, kcp_client: KCPClient):
 
                                 kcp_connet= True
 
-                                msg = public_api_down_pb2.APIDown()
-                                msg.protocol_major_version = 1
-                                msg.protocol_minor_version = 4
-                                msg.set_report_frequency = public_api_types_pb2.Rf50Hz
+                                # msg = public_api_down_pb2.APIDown()
+                                # msg.protocol_major_version = 1
+                                # msg.protocol_minor_version = 4
+                                # msg.set_report_frequency = public_api_types_pb2.Rf50Hz
                                 
-                                await ws_client.send_msg(msg)
+                                # await ws_client.send_msg(msg)
                             
                             # 标记状态切换
                             is_getkcp_port = True
@@ -697,6 +643,13 @@ async def main():
         print("\n程序被用户中断")
         print(f"kcp_recv_buff: {kcp_recv_buff}")
     finally:
+
+        msg = public_api_down_pb2.APIDown()
+        msg.base_command.api_control_initialize = False
+        x4_kcp_client.send_hex(msg)
+        time.sleep(1)
+
+
         await x4_ws_client.stop()
 
 if __name__ == "__main__":

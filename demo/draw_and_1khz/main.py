@@ -20,6 +20,7 @@ os.sched_setaffinity(0, {0})
 
 from WebsocketClient import WebSocketClient
 from KCPClient import KCPClient
+# from hex_dev_py import KCPClient, WebsocketClient
 from API_msg import APIMessage
 from plotjuggle_draw import PlotjuggleDraw
 
@@ -38,50 +39,116 @@ kcp_conn_ready_event = threading.Event()
 hex_parser = HexSocketParser()
 
 
-KCP_BUFF_LEN = 20
+KCP_BUFF_LEN = 100
 kcp_recv_buff = deque(maxlen=KCP_BUFF_LEN)
+kcp_raw_deque = deque(maxlen=KCP_BUFF_LEN)
 recv_buf_lock = threading.Lock()
-
 def kcp_recv_handler(data: bytes):
-    # 先把收到的数据喂给 HexSocket 解析器
-    result = hex_parser.parse(data)  # 可能一次解析出多个帧
+    try:
+        # 通过双端队列完成
+        kcp_raw_deque.append(data)
+        # pass
+    except Exception as e:
+        print(f"[KCP 回调] Proto 解析失败: {e}")
+      
+def kcp_process_thread():
+    print("[处理线程] 已启动")
+    
+    while True:
+        try:
+            # 数据出队
+            if kcp_raw_deque:
+                raw_data = kcp_raw_deque.popleft()
+            else:
+                time.sleep(0.001)
+                continue
 
-    if result is None:
-        # 还没有完整帧，可能只是部分头部
-        return
-
-    # 遍历所有解析出来的帧
-    for opcode, payload in result:
-        # 根据 opcode 分发：通常只用 Binary
-        if opcode == HexSocketOpcode.Binary:
+            # --- 解析逻辑 ---
             try:
-                up_msg = public_api_up_pb2.APIUp()
-                up_msg.ParseFromString(payload)  # 注意：这里是从 payload 解，不是原始 data
-                if up_msg.base_status.api_control_initialized:
-                    if not control_ready_event.is_set():
-                        print(f"[KCP 回调] >>> 控制权获取成功! <<<")
-                        control_ready_event.set()
-                # with recv_buf_lock:
-                #     if len(kcp_recv_buff) >= KCP_BUFF_LEN:
-                #         kcp_recv_buff.pop(0)
-                #     kcp_recv_buff.append(up_msg)
-                # 采用双端队列完成缓冲区操作
-                kcp_recv_buff.append(up_msg)
-                # print(f"[KCP 回调] 收到消息: {up_msg}")
+                result = hex_parser.parse(raw_data)
+            except ValueError as e:
+                # 打印日志（调试用）
+                # print(f"[Warn] 数据包解析错误，已丢弃: {e}")
+                
+                # 重置解析器状态，坏包丢弃
+                if hasattr(hex_parser, 'reset'):
+                    hex_parser.reset()
+                # 或者粗暴一点：重新实例化一个（不推荐，效率低）
+                # hex_parser = HexSocketParser() 
+                continue 
+            
+            if result is None:
+                continue
 
-                # return up_msg
-            except Exception as e:
-                print(f"[KCP 回调] Proto 解析失败: {e}")
-        elif opcode == HexSocketOpcode.Text:
-            # 如果有文本消息，按需处理
-            print(f"[HexSocket Text] {payload.decode('utf-8', errors='replace')}")
-        elif opcode == HexSocketOpcode.Ping:
-            # 如果需要，可以回 Pong
-            print("[HexSocket] Ping received")
-        elif opcode == HexSocketOpcode.Pong:
-            print("[HexSocket] Pong received")
-        else:
-            print(f"[HexSocket] Unknown opcode {opcode}: {payload[:20]!r}")
+            # 3. 业务处理
+            for opcode, payload in result:
+                if opcode == HexSocketOpcode.Binary:
+                    try:
+                        # 全局 deque
+                        kcp_recv_buff.append(payload)
+                    except Exception as e:
+                        # print(f"[Warn] 协议错误，已丢弃: {e}")
+                        pass 
+                        
+                # elif ... (其他逻辑，尽量别用 print)
+            time.sleep(0.001)
+                
+        except IndexError:
+            # 极少数情况下多线程竞争可能触发，忽略并重试
+            continue
+        except Exception as e:
+            # 捕获其他异常，防止线程崩溃退出
+            print(f"[处理线程] 异常: {e}")
+            traceback.print_exc()
+            time.sleep(0.1) # 发生错误时稍微停顿
+
+
+# # ===== 旧版 KCP 接收处理：震荡过大：呈现集中趋势 =====
+# KCP_BUFF_LEN = 20
+# kcp_recv_buff = deque(maxlen=KCP_BUFF_LEN)
+# recv_buf_lock = threading.Lock()
+
+# def kcp_recv_handler(data: bytes):
+#     # 先把收到的数据喂给 HexSocket 解析器
+#     result = hex_parser.parse(data)  # 可能一次解析出多个帧
+
+#     if result is None:
+#         # 还没有完整帧，可能只是部分头部
+#         return
+
+#     # 遍历所有解析出来的帧
+#     for opcode, payload in result:
+#         # 根据 opcode 分发：通常只用 Binary
+#         if opcode == HexSocketOpcode.Binary:
+#             try:
+#                 up_msg = public_api_up_pb2.APIUp()
+#                 up_msg.ParseFromString(payload)  # 注意：这里是从 payload 解，不是原始 data
+#                 if up_msg.base_status.api_control_initialized:
+#                     if not control_ready_event.is_set():
+#                         print(f"[KCP 回调] >>> 控制权获取成功! <<<")
+#                         control_ready_event.set()
+#                 # with recv_buf_lock:
+#                 #     if len(kcp_recv_buff) >= KCP_BUFF_LEN:
+#                 #         kcp_recv_buff.pop(0)
+#                 #     kcp_recv_buff.append(up_msg)
+#                 # 采用双端队列完成缓冲区操作
+#                 kcp_recv_buff.append(up_msg)
+#                 # print(f"[KCP 回调] 收到消息: {up_msg}")
+
+#                 # return up_msg
+#             except Exception as e:
+#                 print(f"[KCP 回调] Proto 解析失败: {e}")
+#         elif opcode == HexSocketOpcode.Text:
+#             # 如果有文本消息，按需处理
+#             print(f"[HexSocket Text] {payload.decode('utf-8', errors='replace')}")
+#         elif opcode == HexSocketOpcode.Ping:
+#             # 如果需要，可以回 Pong
+#             print("[HexSocket] Ping received")
+#         elif opcode == HexSocketOpcode.Pong:
+#             print("[HexSocket] Pong received")
+#         else:
+#             print(f"[HexSocket] Unknown opcode {opcode}: {payload[:20]!r}")
+
 
 kcp_send_lock = threading.Lock()
 
@@ -210,22 +277,7 @@ async def crl_loop(ws_client: WebSocketClient, kcp_client: KCPClient):
             recv_msg.ParseFromString(data)
             if time.perf_counter() - last_websocket_time > 0.9:
                 msg = APIMsg.set_placeholder_message()
-                await ws_client.send_msg(msg)
-
-            # # --- KCP 控制指令发送 (1000Hz) ---
-            # if current_time - last_kcp_send_time >= 0.001:
-            #     # print(f"time{current_time - last_kcp_send_time}")
-            #     # if len(kcp_send_queue) > 0:
-            #     #     # 1. 发送移动指令 (队列第一条)
-            #     #     move_msg = kcp_send_queue[0]   # speed command
-            #     #     kcp_client.send_hex(move_msg)
-
-                
-                # move_msg = APIMsg.set_simple_move_command(True,0.5,0,0)   # speed command
-                # kcp_client.send_hex(move_msg)
-                        
-            #     last_kcp_send_time = time.time()
-            
+                await ws_client.send_msg(msg)     
 
         # 短暂休眠防止 CPU 空转
         await asyncio.sleep(0.01)
@@ -233,129 +285,33 @@ async def crl_loop(ws_client: WebSocketClient, kcp_client: KCPClient):
     print("crl_loop end")
 
 
-
-
 def draw_loop():
     draw = PlotjuggleDraw()
-    last_draw_time = time.monotonic()
+    interval = 0.01 #s
+    last_draw_time = time.perf_counter()
+    target_time = time.perf_counter()
     while True:
-        if time.monotonic() - last_draw_time >= 0.05:
+        sleep_time =  target_time - time.perf_counter()
+        # print(f"sleep_time: {sleep_time:.6f}")
+        if sleep_time > 0:
+            time.sleep(sleep_time)
             with recv_buf_lock:
                 if kcp_recv_buff:
-                    msg = kcp_recv_buff.pop()
-                    draw.send_data(msg.SerializeToString())
+                    payload = kcp_recv_buff.pop()
+                    draw.send_data(payload)
 
-            time.sleep(time.monotonic() - last_draw_time)
+        # 粗略的周期计算,比实际略低0.7-0.9左右
+        target_time = last_draw_time + interval
+        last_draw_time = time.perf_counter()
 
-
-
-# async def delay(target_time):
-#     """
-#     混合等待策略：先休眠，再忙等。
-#     目标：兼顾 CPU 占用与精度。
-#     """
-#     now = time.perf_counter()
-#     remain = target_time - now
-
-#     if remain <= 0:
-#         return  # 已经超时，直接返回
-
-#     # 策略参数：
-#     # 保留 0.5ms (0.0005s) 用于忙等。
-#     # 这里的 0.5ms 是经验值，取决于你的系统调度延迟。
-#     # 如果系统负载高，可以适当减小这个值；如果追求低CPU，可以增大。
-#     SLEEP_THRESHOLD = 0.0005 
-
-#     if remain > SLEEP_THRESHOLD:
-#         # 粗粒度休眠：让出 CPU
-#         # 注意：asyncio.sleep 本身精度也不高，所以要多留一点余量给忙等
-#         try:
-#             await asyncio.sleep(remain - SLEEP_THRESHOLD)
-#         except asyncio.CancelledError:
-#             return
-
-#     # 细粒度忙等：最后关头由 CPU 精确卡点
-#     while time.perf_counter() < target_time:
-#         pass
-
-# async def kcp_send_async_loop(kcp_client, interval=0.001):
-#     """
-#     核心发送逻辑：异步模式
-#     """
-#     # 等待连接就绪
-#     # 注意：如果在异步环境中，建议使用 asyncio.Event，这里为了兼容性演示简单的轮询
-#     while not kcp_conn_ready_event.is_set():
-#         await asyncio.sleep(0.1)
-
-#     print("KCP 发送线程已启动 (Async 混合模式)")
-    
-#     cnt = 0
-#     start_f_time = time.perf_counter()
-#     # 记录下一次期望发送的绝对时间点
-#     next_send_time = time.perf_counter()
-    
-#     last_print_time = time.perf_counter()
-
-#     try:
-#         while True:
-#             # 1. 精确等待
-#             # 使用 await 让出控制权，内部实现混合等待逻辑
-#             await delay(next_send_time)
-
-#             # 2. 执行发送任务
-#             try:
-#                 # 你的业务逻辑
-#                 move_msg = APIMsg.set_simple_move_command(True, 0.5, 0, 0)
-#                 with kcp_send_lock:
-#                     kcp_client.send_hex(move_msg)
-#             except Exception as e:
-#                 print(f"发送异常: {e}")
-
-#             # 3. 更新周期数据
-#             cnt += 1
-#             # 打印周期（可选，会影响性能）
-#             print(f"kcp 周期：{time.perf_counter() - last_print_time:.6f}")
-#             last_print_time = time.perf_counter()
-
-#             # 4. 计算下一次发送时间
-#             next_send_time += interval
-
-#             # 安全机制：如果因为处理卡顿导致落后太多（例如超过10个周期），则重置时间防止追赶风暴
-#             if time.perf_counter() - next_send_time > interval * 10:
-#                  next_send_time = time.perf_counter() + interval
-
-#             if cnt == 1000: break
-
-#     finally:
-#         end_f_time = time.perf_counter()
-#         print(f"发送频率：{cnt / (end_f_time - start_f_time)}，发送时长：{end_f_time - start_f_time}")
-#         # 发送结束指令
-#         if kcp_client:
-#             move_msg = APIMsg.set_command_api_control_initialize(False)
-#             kcp_client.send_hex(move_msg)
-
-# def kcp_send_thread(kcp_client):
-#     """
-#     线程入口函数：
-#     负责创建并运行新的事件循环，驱动上面的异步发送逻辑。
-#     """
-#     # 为这个子线程创建一个新的事件循环
-#     loop = asyncio.new_event_loop()
-#     asyncio.set_event_loop(loop)
-    
-#     try:
-#         # 运行异步任务，直到任务完成
-#         loop.run_until_complete(kcp_send_async_loop(kcp_client))
-#     finally:
-#         # 清理循环
-#         loop.close()
-
+# move_msg = APIMsg.set_command_api_control_initialize(False)
+# move_msg = APIMsg.set_simple_move_command(True,0.5,0,0)
+send_queue = [APIMsg.set_simple_move_command(True,0.5,0,0),APIMsg.set_command_api_control_initialize(False)]
 
 def kcp_send_thread(kcp_client):
 
     interval = 0.001 #ms
     # time.monotonic()
-
     last_send_time = time.perf_counter()
 
     # 等待同步信号：kcp连接成功
@@ -394,7 +350,7 @@ def kcp_send_thread(kcp_client):
         #  忙等+睡眠：看具体计算方式。
         # ---------------------------------------------------
 
-        # target_time = last_send_time + interval  # 通过上一次发送时间，计算下次发送时间,间隔1ms,大概700hz
+        # target_time = last_send_time + interval*0.73  # 通过上一次发送时间(Hz不稳定)，计算下次发送时间,间隔1ms,大概700hz
         
         sleep_time =  target_time - time.perf_counter()
         if sleep_time > 0.00035:
@@ -404,9 +360,9 @@ def kcp_send_thread(kcp_client):
             pass
 
         try:
-            move_msg = APIMsg.set_simple_move_command(True,0.5,0,0)
-            with kcp_send_lock:
-                kcp_client.send_hex(move_msg)
+            # move_msg = APIMsg.set_simple_move_command(True,0.5,0,0)
+            # with kcp_send_lock:
+            kcp_client.send_hex(send_queue[0])
         except Exception as e:
             print(f"发送异常: {e}")
 
@@ -417,9 +373,9 @@ def kcp_send_thread(kcp_client):
         #     target_time += interval
         # target_time = last_send_time + interval
         # target_time = last_send_time + 0.000915
-        target_time += interval
+        target_time += interval # 通过当前target累加，计算出下一个target
 
-        print(f"kcp 周期：{time.perf_counter() - last_send_time:.06f}")
+        print(f"kcp：{time.perf_counter() - last_send_time:.06f}")
         last_send_time = time.perf_counter()
 
         cnt+=1
@@ -439,11 +395,14 @@ def start_thread(kcp_client):
     draw_thread.start()
     kcp_thread = threading.Thread(target=kcp_send_thread, args=(kcp_client,), daemon=True)
     kcp_thread.start()
+    t_process = threading.Thread(target=kcp_process_thread, daemon=True)
+    t_process.start()
 
 
 async def main():
     x4_ws_client = WebSocketClient(Server_Host, Server_Port, heartBeat=True)
     x4_kcp_client = KCPClient()
+    input()
     
     try:
         await asyncio.gather(

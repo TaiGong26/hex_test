@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Optional, Callable
 import traceback
 import logging
-from hex_socket import HexSocketParser, HexSocketOpcode
+from .hex_socket import HexSocketParser, HexSocketOpcode
 
 @dataclass
 class KCPConfig:

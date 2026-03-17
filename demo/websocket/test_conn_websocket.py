@@ -279,6 +279,9 @@ async def main():
         print(f"msg:{recv_buf[-1]}")
         print("\n程序被用户中断")
     finally:
+        down_msg = public_api_down_pb2.APIDown()
+        down_msg.base_command.api_control_initialize = False
+        await x4.send_msg(down_msg)
         await x4.stop()
 
 if __name__ == "__main__":
